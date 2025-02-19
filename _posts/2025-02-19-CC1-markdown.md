@@ -4,7 +4,7 @@ title: CC链
 subtitle: Let's start learning!
 gh-repo: daattali/beautiful-jekyll
 gh-badge: [star, fork, follow]
-tags: [Test]
+tags: [test]
 comments: true
 mathjax: true
 author: Sine
