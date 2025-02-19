@@ -1,26 +1,30 @@
 ---
 layout: post
-title: Sample blog post to learn markdown tips
-subtitle: There's lots to learn!
+title: CC链
+subtitle: Let's start learning!
 gh-repo: daattali/beautiful-jekyll
 gh-badge: [star, fork, follow]
 tags: [test]
 comments: true
 mathjax: true
-author: Bill Smith
+author: Sine
 ---
 
 # CC1
 
+JDK版本小于JDK-8u71，commons-collections版本等于3.2.1
+
 ## CC1-1
 
-**反序列化方法deserialize**
+**利用链：**
 
-**->AnnotationInvocationHandler.readobject()**
+**AnnotationInvocationHandler.readobject()->setValue()-> TransformedMap.checkSetValue()->chainedTransformer.transform->new ConstantTransformer（Runtime.class）->return this.iConstant(Runtime.class)->getMethod(getRuntime)->invoke->exec(“”)**
 
-**->setValue()-> checkSetValue()->transform()**
+Transformed是一个接口类，提供了一个transform方法
 
-InvokerTransformer的transform方法实现了反射，可以调用任意方法，类为传入的input参数
+![image-20250219095324974](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250219095330464.png)
+
+InvokerTransformer实现了Transformed，它的transform方法实现了反射，可以调用任意方法，类为传入的input参数
 
 ![image-20250217164602236](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217164602280.png)
 
@@ -236,4 +240,4 @@ public class CC1Test1 {
 
 ![image-20250217223428712](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217223428827.png)
 
-AnnotationInvocationHandler.readobject()->setValue()-> TransformedMap.checkSetValue()->chainedTransformer.transform->new ConstantTransformer（Runtime.class）->return this.iConstant(Runtime.class)->getMethod(getRuntime)->invoke->exec(“”)
+
