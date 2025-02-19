@@ -2,7 +2,7 @@
 layout: post
 title: CC链-CC1
 subtitle: Let's start learning!
-tags: [books, test]
+tags: [CC链]
 author: Sine
 ---
 
