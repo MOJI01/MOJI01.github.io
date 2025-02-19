@@ -1,12 +1,9 @@
 ---
 layout: post
-title: CC1
-subtitle: Excerpt from Soulshaping by Jeff Brown
-cover-img: /assets/img/path.jpg
-thumbnail-img: /assets/img/thumb.png
-share-img: /assets/img/path.jpg
+title: CC链-CC1
+subtitle: Let's start learning!
 tags: [books, test]
-author: Sharon Smith and Barry Simpson
+author: Sine
 ---
 
 # CC1
